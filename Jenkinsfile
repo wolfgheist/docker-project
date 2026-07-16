@@ -56,6 +56,7 @@ pipeline {
                     bat '''
                     icacls "%EC2_KEY%" /inheritance:r
                     icacls "%EC2_KEY%" /grant:r "%USERNAME%:F"
+                    icacls "%EC2_KEY%" /grant:r "Administrators:F"
                     aws ecr get-login-password --region %AWS_REGION% > ecr_pass.txt
                     type ecr_pass.txt | ssh -i "%EC2_KEY%" -o StrictHostKeyChecking=no %EC2_USER%@%EC2_IP% "docker login --username AWS --password-stdin %ECR_REGISTRY%"
                     del ecr_pass.txt
