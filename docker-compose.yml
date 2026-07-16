@@ -1,10 +1,9 @@
 services:
-  # PHP Application
   php-app:
-    image: oluwaseuna/docker:1
+    image: 386318011177.dkr.ecr.us-east-2.amazonaws.com/test:latest
     container_name: php-app
     ports:
-      - "80:80"  # Expose port 80 on the container to port 8080 on localhost
+      - "80:80"
     environment:
       DB_HOST: db
       DB_NAME: ${MYSQL_DATABASE}
@@ -15,7 +14,6 @@ services:
     depends_on:
       - db
 
-  # MySQL Database
   db:
     image: mysql:8.0.36
     container_name: mysql-db
@@ -28,13 +26,12 @@ services:
     volumes:
       - db_data:/var/lib/mysql
 
-  # phpMyAdmin for Database Administration
   phpmyadmin:
     image: phpmyadmin
     container_name: phpmyadmin
     restart: always
     ports:
-      - "8081:80"  # Expose phpMyAdmin on port 8081
+      - "8081:80"
     environment:
       PMA_HOST: db
       PMA_PORT: 3306

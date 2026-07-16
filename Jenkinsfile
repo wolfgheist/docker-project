@@ -2,47 +2,72 @@ pipeline {
     agent any
 
     environment {
-        ImageRegistry = 'oluwaseuna'
-        EC2_IP = '54.171.233.251'
+        AWS_REGION       = 'us-east-2'
+        AWS_ACCOUNT_ID   = '386318011177'
+        ECR_REPOSITORY   = 'test'
+        ECR_URI          = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
+        EC2_IP           = '3.15.43.184'
         DockerComposeFile = 'docker-compose.yml'
-        DotEnvFile = '.env'
+        DotEnvFile        = '.env'
     }
 
     stages {
-
-        stage("buildImage") {
+        stage('Checkout') {
             steps {
-                script {
-                    echo "Building Docker Image..."
-                    sh "docker build -t ${ImageRegistry}/${JOB_NAME}:${BUILD_NUMBER} ."
+                checkout scm
+            }
+        }
+
+        stage('Build Image') {
+            steps {
+                sh 'docker build -t app:${BUILD_NUMBER} .'
+            }
+        }
+
+        stage('Login to ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+                    sh '''
+                        aws ecr get-login-password --region "$AWS_REGION" | \
+                        docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+                    '''
                 }
             }
         }
 
-        stage("pushImage") {
+        stage('Tag and Push Image') {
             steps {
-                script {
-                    echo "Pushing Image to DockerHub..."
-                    withCredentials([usernamePassword(credentialsId: 'docker-login', passwordVariable: 'PASS', usernameVariable: 'USER')]) {
-                        sh "echo $PASS | docker login -u $USER --password-stdin"
-                        sh "docker push ${ImageRegistry}/${JOB_NAME}:${BUILD_NUMBER}"
-                    }
-                }
+                sh '''
+                    docker tag app:${BUILD_NUMBER} "$ECR_URI:${BUILD_NUMBER}"
+                    docker tag app:${BUILD_NUMBER} "$ECR_URI:latest"
+                    docker push "$ECR_URI:${BUILD_NUMBER}"
+                    docker push "$ECR_URI:latest"
+                '''
             }
         }
 
-        stage("deployCompose") {
+        stage('Deploy to EC2') {
             steps {
-                script {
-                    echo "Deploying with Docker Compose..."
-                    sshagent(['ec2']) {
-                        // Upload files once to reduce redundant SCP commands
-                        sh """
-                        scp -o StrictHostKeyChecking=no ${DotEnvFile} ${DockerComposeFile} ubuntu@${EC2_IP}:/home/ubuntu
-                        ssh -o StrictHostKeyChecking=no ubuntu@${EC2_IP} "docker compose -f /home/ubuntu/${DockerComposeFile} --env-file /home/ubuntu/${DotEnvFile} down"
-                        ssh -o StrictHostKeyChecking=no ubuntu@${EC2_IP} "docker compose -f /home/ubuntu/${DockerComposeFile} --env-file /home/ubuntu/${DotEnvFile} up -d"
-                        """
-                    }
+                withCredentials([
+                    sshUserPrivateKey(credentialsId: 'ec2', keyFileVariable: 'EC2_KEY', usernameVariable: 'EC2_USER'),
+                    [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']
+                ]) {
+                    sh '''
+                        scp -i "$EC2_KEY" -o StrictHostKeyChecking=no "$DotEnvFile" "$DockerComposeFile" "$EC2_USER@$EC2_IP:/home/ubuntu/"
+
+                        PASSWORD=$(aws ecr get-login-password --region "$AWS_REGION")
+                        printf '%s' "$PASSWORD" | ssh -i "$EC2_KEY" -o StrictHostKeyChecking=no "$EC2_USER@$EC2_IP" \
+                            "docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+
+                        ssh -i "$EC2_KEY" -o StrictHostKeyChecking=no "$EC2_USER@$EC2_IP" \
+                            "docker compose -f /home/ubuntu/$DockerComposeFile --env-file /home/ubuntu/$DotEnvFile down || true"
+
+                        ssh -i "$EC2_KEY" -o StrictHostKeyChecking=no "$EC2_USER@$EC2_IP" \
+                            "docker compose -f /home/ubuntu/$DockerComposeFile --env-file /home/ubuntu/$DotEnvFile pull"
+
+                        ssh -i "$EC2_KEY" -o StrictHostKeyChecking=no "$EC2_USER@$EC2_IP" \
+                            "docker compose -f /home/ubuntu/$DockerComposeFile --env-file /home/ubuntu/$DotEnvFile up -d"
+                    '''
                 }
             }
         }
